@@ -218,9 +218,11 @@ function App() {
           } catch (error) {
             // Each chunk is idempotent (upsert), so a transient failure can safely be retried.
             attempt += 1;
-            if (attempt >= 4) throw new Error(`${error.message} (berhenti di bagian ${chunk + 1}; ${totalSeen} SKU sudah tersimpan, klik sinkronkan lagi untuk melanjutkan)`);
-            setAdminMessage(`Bagian ${chunk + 1} gagal (${error.message}). Mengulang ${attempt}/3…`);
-            await wait(1500 * attempt);
+            if (attempt >= 5) throw new Error(`${error.message} (berhenti di bagian ${chunk + 1}; ${totalSeen} SKU sudah tersimpan, tunggu 1 menit lalu klik sinkronkan lagi)`);
+            const limited = /rate limit|too many/i.test(error.message);
+            const delay = limited ? 12000 : 2000 * attempt;
+            setAdminMessage(`Bagian ${chunk + 1} ${limited ? 'menunggu batas kecepatan Melo' : 'gagal'} (${error.message}). Mengulang ${attempt}/4 dalam ${Math.round(delay / 1000)} detik…`);
+            await wait(delay);
           }
         }
         chunk += 1;
@@ -228,6 +230,8 @@ function App() {
         runStartedAt = result.run_started_at;
         totalSeen = result.total_seen;
         setAdminMessage(`Menyinkronkan katalog… bagian ${chunk}, ${totalSeen} SKU tersimpan.`);
+        // Melo allows 20 pricelist requests per minute: keep a steady pace (~17/min).
+        if (result.has_more) await wait(3500);
       } while (result.has_more);
       setAdminMessage(`Selesai: ${totalSeen} SKU disinkronkan dari ${result.brands} brand dalam ${chunk} bagian. ${result.deactivated ?? 0} SKU lama dinonaktifkan.`);
       await loadCatalog(); await loadAdmin();
