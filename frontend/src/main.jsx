@@ -67,8 +67,16 @@ function App() {
   async function loadCatalog() {
     setLoadingProducts(true); setLoadError('');
     try {
-      const data = await api('/api/catalog');
-      setProducts(data.products || []);
+      // The catalogue has thousands of SKUs; fetch it in pages of 1000.
+      const PAGE = 1000;
+      const all = [];
+      for (let offset = 0; offset < 50000; offset += PAGE) {
+        const data = await api(`/api/catalog?limit=${PAGE}&offset=${offset}`);
+        const batch = data.products || [];
+        all.push(...batch);
+        if (!data.has_more || !batch.length) break;
+      }
+      setProducts(all);
     } catch (error) { setLoadError(error.message); }
     finally { setLoadingProducts(false); }
   }
@@ -197,10 +205,31 @@ function App() {
     } catch (error) { alert(error.message); }
   }
   async function syncCatalogue() {
-    setAdminBusy(true); setAdminMessage('Sedang menyinkronkan katalog Melo H2H…');
+    setAdminBusy(true); setAdminMessage('Memulai sinkronisasi katalog Melo H2H…');
+    const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
     try {
-      const result = await api('/api/admin/catalog/sync', { token, method: 'POST' });
-      setAdminMessage(`Selesai: ${result.imported} SKU diimpor dari ${result.brands} brand.`);
+      let cursor = null, runStartedAt = null, totalSeen = 0, chunk = 0, result = null;
+      do {
+        let attempt = 0;
+        for (;;) {
+          try {
+            result = await api('/api/admin/catalog/sync', { token, method: 'POST', body: { cursor, run_started_at: runStartedAt, total_seen: totalSeen } });
+            break;
+          } catch (error) {
+            // Each chunk is idempotent (upsert), so a transient failure can safely be retried.
+            attempt += 1;
+            if (attempt >= 4) throw new Error(`${error.message} (berhenti di bagian ${chunk + 1}; ${totalSeen} SKU sudah tersimpan, klik sinkronkan lagi untuk melanjutkan)`);
+            setAdminMessage(`Bagian ${chunk + 1} gagal (${error.message}). Mengulang ${attempt}/3…`);
+            await wait(1500 * attempt);
+          }
+        }
+        chunk += 1;
+        cursor = result.next_cursor;
+        runStartedAt = result.run_started_at;
+        totalSeen = result.total_seen;
+        setAdminMessage(`Menyinkronkan katalog… bagian ${chunk}, ${totalSeen} SKU tersimpan.`);
+      } while (result.has_more);
+      setAdminMessage(`Selesai: ${totalSeen} SKU disinkronkan dari ${result.brands} brand dalam ${chunk} bagian. ${result.deactivated ?? 0} SKU lama dinonaktifkan.`);
       await loadCatalog(); await loadAdmin();
     } catch (error) { setAdminMessage(error.message); }
     finally { setAdminBusy(false); }
