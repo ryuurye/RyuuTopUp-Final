@@ -1,0 +1,13 @@
+name = "ryuutopup-api"
+main = "src/index.js"
+compatibility_date = "2026-11-10"
+workers_dev = true
+
+[vars]
+MIDTRANS_IS_PRODUCTION = "false"
+MELO_SANDBOX_MODE = "true"
+DEFAULT_MARGIN_PERCENT = "10"
+STORE_NAME = "RyuuTopUp"
+
+# Put secrets in Cloudflare Dashboard → Worker → Settings → Variables and Secrets.
+# Never put server keys in this file.
