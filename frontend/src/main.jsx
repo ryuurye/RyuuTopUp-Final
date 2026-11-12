@@ -11,7 +11,15 @@ const MIDTRANS_SCRIPT = MIDTRANS_LIVE ? 'https://app.midtrans.com/snap/snap.js' 
 function App() {
   const [session, setSession] = useState(null);
   const [profile, setProfile] = useState(null);
-  const [products, setProducts] = useState([]);
+  const [brands, setBrands] = useState([]);
+  const [visibleBrands, setVisibleBrands] = useState(48);
+  const [selectedBrand, setSelectedBrand] = useState(null);
+  const [brandProducts, setBrandProducts] = useState([]);
+  const [brandLoading, setBrandLoading] = useState(false);
+  const [brandError, setBrandError] = useState('');
+  const [brandSearch, setBrandSearch] = useState('');
+  const [brandType, setBrandType] = useState('Semua');
+  const [visibleVariants, setVisibleVariants] = useState(60);
   const [loadingProducts, setLoadingProducts] = useState(true);
   const [loadError, setLoadError] = useState('');
   const [category, setCategory] = useState('Semua');
@@ -67,18 +75,27 @@ function App() {
   async function loadCatalog() {
     setLoadingProducts(true); setLoadError('');
     try {
-      // The catalogue has thousands of SKUs; fetch it in pages of 1000.
+      // Only the brand list is loaded here; denominations are loaded when a brand is opened.
+      const data = await api('/api/brands');
+      setBrands(data.brands || []);
+    } catch (error) { setLoadError(error.message); }
+    finally { setLoadingProducts(false); }
+  }
+  async function openBrand(brand) {
+    setSelectedBrand(brand); setBrandProducts([]); setBrandSearch(''); setBrandType('Semua');
+    setVisibleVariants(60); setBrandError(''); setBrandLoading(true);
+    try {
       const PAGE = 1000;
       const all = [];
-      for (let offset = 0; offset < 50000; offset += PAGE) {
-        const data = await api(`/api/catalog?limit=${PAGE}&offset=${offset}`);
+      for (let offset = 0; offset < 20000; offset += PAGE) {
+        const data = await api(`/api/catalog?brand=${encodeURIComponent(brand.brand)}&limit=${PAGE}&offset=${offset}`);
         const batch = data.products || [];
         all.push(...batch);
         if (!data.has_more || !batch.length) break;
       }
-      setProducts(all);
-    } catch (error) { setLoadError(error.message); }
-    finally { setLoadingProducts(false); }
+      setBrandProducts(all);
+    } catch (error) { setBrandError(error.message); }
+    finally { setBrandLoading(false); }
   }
   async function loadProfile() {
     try {
@@ -107,15 +124,25 @@ function App() {
 
   const categories = useMemo(() => {
     const all = new Set();
-    products.forEach(p => all.add(classify(p)));
+    brands.forEach(b => all.add(classify({ category_name: b.category_name, brand_name: b.brand })));
     return ['Semua', ...['Game', 'Pulsa', 'E-Wallet', 'Voucher', 'Lainnya'].filter(x => all.has(x))];
-  }, [products]);
-  const filtered = useMemo(() => products.filter(p => {
-    const matchesCategory = category === 'Semua' || classify(p) === category;
+  }, [brands]);
+  const filtered = useMemo(() => brands.filter(b => {
+    const matchesCategory = category === 'Semua' || classify({ category_name: b.category_name, brand_name: b.brand }) === category;
     const term = search.toLowerCase().trim();
-    const matchesSearch = !term || `${p.product_name} ${p.brand_name || ''} ${p.category_name || ''} ${p.type_name || ''}`.toLowerCase().includes(term);
+    const matchesSearch = !term || `${b.brand} ${b.category_name || ''}`.toLowerCase().includes(term);
     return matchesCategory && matchesSearch;
-  }), [products, category, search]);
+  }), [brands, category, search]);
+  useEffect(() => { setVisibleBrands(48); }, [category, search]);
+  useEffect(() => { setVisibleVariants(60); }, [brandSearch, brandType]);
+  const brandTypes = useMemo(() => {
+    const types = [...new Set(brandProducts.map(p => p.type_name).filter(Boolean))];
+    return types.length > 1 && types.length <= 14 ? ['Semua', ...types] : [];
+  }, [brandProducts]);
+  const filteredVariants = useMemo(() => {
+    const term = brandSearch.toLowerCase().trim();
+    return brandProducts.filter(p => (brandType === 'Semua' || p.type_name === brandType) && (!term || `${p.product_name} ${p.type_name || ''}`.toLowerCase().includes(term)));
+  }, [brandProducts, brandSearch, brandType]);
 
   function classify(p) {
     const s = `${p.category_name || ''} ${p.brand_name || ''} ${p.product_name || ''} ${p.type_name || ''}`.toLowerCase();
@@ -172,7 +199,7 @@ function App() {
     setCheckoutBusy(true); setCheckoutError('');
     try {
       const created = await api('/api/orders', { token, method: 'POST', body: { sku_code: selected.sku_code, target, target_zone: zone, additional_data: additionalData } });
-      setSelected(null); setActivePage('orders'); await loadOrders();
+      setSelected(null); setSelectedBrand(null); setActivePage('orders'); await loadOrders();
       const snap = await loadSnapScript();
       snap.pay(created.snap_token, {
         onSuccess: async () => { setActivePage('orders'); await loadOrders(); alert('Pembayaran berhasil diterima. Top-up sedang diproses.'); },
@@ -301,9 +328,9 @@ function App() {
         <section className="trust-strip"><div><span className="trust-icon">◈</span><span><b>Proses terstruktur</b><small>Status pesanan tercatat</small></span></div><div><span className="trust-icon">⌁</span><span><b>Pembayaran tepercaya</b><small>Didukung Midtrans</small></span></div><div><span className="trust-icon">◎</span><span><b>Produk digital</b><small>Game hingga e-wallet</small></span></div></section>
 
         <section className="catalog-section" id="catalog">
-          <div className="section-heading"><div><span className="eyebrow">PILIH KEBUTUHANMU</span><h2>Temukan produk</h2><p>Pilih produk digital dan lanjutkan ke checkout.</p></div><div className="catalog-count">{products.length ? `${products.length} produk tersedia` : 'Katalog produk'}</div></div>
-          <div className="catalog-tools"><div className="category-tabs">{categories.map(c => <button key={c} className={category === c ? 'category-active' : ''} onClick={() => setCategory(c)}>{c}</button>)}</div><label className="search-box"><span>⌕</span><input value={search} onChange={e => setSearch(e.target.value)} placeholder="Cari produk atau brand..."/><kbd>⌘ K</kbd></label></div>
-          {loadingProducts ? <div className="empty-state"><div className="loader"></div><b>Memuat katalog produk…</b><span>Mengambil produk aktif dari server.</span></div> : loadError ? <div className="error-panel"><b>Katalog belum dapat dimuat</b><p>{loadError}</p><button className="outline-btn" onClick={loadCatalog}>Coba lagi</button></div> : filtered.length ? <div className="product-grid">{filtered.map(p => <ProductCard key={p.sku_code} product={p} onBuy={() => openPurchase(p)}/>)}</div> : <div className="empty-state"><div className="empty-icon">⌕</div><b>Produk tidak ditemukan</b><span>Coba kata kunci atau kategori lain.</span></div>}
+          <div className="section-heading"><div><span className="eyebrow">PILIH KEBUTUHANMU</span><h2>Temukan produk</h2><p>Pilih brand, lalu pilih nominal atau paket yang kamu butuhkan.</p></div><div className="catalog-count">{brands.length ? `${brands.length} brand tersedia` : 'Katalog produk'}</div></div>
+          <div className="catalog-tools"><div className="category-tabs">{categories.map(c => <button key={c} className={category === c ? 'category-active' : ''} onClick={() => setCategory(c)}>{c}</button>)}</div><label className="search-box"><span>⌕</span><input value={search} onChange={e => setSearch(e.target.value)} placeholder="Cari brand, misalnya DANA atau Mobile Legends..."/><kbd>⌘ K</kbd></label></div>
+          {loadingProducts ? <div className="empty-state"><div className="loader"></div><b>Memuat katalog produk…</b><span>Mengambil produk aktif dari server.</span></div> : loadError ? <div className="error-panel"><b>Katalog belum dapat dimuat</b><p>{loadError}</p><button className="outline-btn" onClick={loadCatalog}>Coba lagi</button></div> : filtered.length ? <><div className="product-grid">{filtered.slice(0, visibleBrands).map(b => <BrandCard key={b.brand} brand={b} onOpen={() => openBrand(b)}/>)}</div>{filtered.length > visibleBrands && <div className="load-more-wrap"><button className="outline-btn" onClick={() => setVisibleBrands(n => n + 48)}>Tampilkan lebih banyak ({filtered.length - visibleBrands} brand lagi)</button></div>}</> : <div className="empty-state"><div className="empty-icon">⌕</div><b>Brand tidak ditemukan</b><span>Coba kata kunci atau kategori lain.</span></div>}
           <p className="catalog-footnote">Harga ditampilkan dalam Rupiah dan dapat berubah mengikuti katalog penyedia. Ketersediaan akhir mengikuti status produk saat checkout.</p>
         </section>
       </>}
@@ -313,6 +340,8 @@ function App() {
     </main>
 
     <footer className="footer"><div className="footer-top"><a className="brand" href="#home"><span className="brand-mark">R</span><span>Ryuu<span className="brand-light">TopUp</span><small>TOP UP • DIGITAL GOODS</small></span></a><p>One place for your digital needs.</p></div><div className="footer-bottom"><span>© {new Date().getFullYear()} RyuuTopUp. All rights reserved.</span><span>Secure checkout · Digital products</span></div></footer>
+
+    {selectedBrand && <Modal wide onClose={() => setSelectedBrand(null)}><div className="brand-head"><div className={`product-avatar ${classNameFor({ category_name: selectedBrand.category_name, brand_name: selectedBrand.brand })}`}>{productInitial({ brand_name: selectedBrand.brand })}</div><div><div className="modal-kicker">PILIH NOMINAL / PAKET</div><h2>{selectedBrand.brand}</h2><small>{brandLoading ? 'Memuat pilihan…' : `${brandProducts.length} pilihan tersedia`}</small></div></div>{brandError ? <div className="error-panel"><b>Pilihan belum dapat dimuat</b><p>{brandError}</p><button className="outline-btn" onClick={() => openBrand(selectedBrand)}>Coba lagi</button></div> : brandLoading ? <div className="empty-state"><div className="loader"></div><b>Memuat pilihan {selectedBrand.brand}…</b></div> : <><div className="variant-tools"><label className="search-box"><span>⌕</span><input value={brandSearch} onChange={e => setBrandSearch(e.target.value)} placeholder={`Cari di ${selectedBrand.brand}…`}/></label>{brandTypes.length > 0 && <div className="variant-chips">{brandTypes.map(t => <button key={t} className={brandType === t ? 'chip-active' : ''} onClick={() => setBrandType(t)}>{t}</button>)}</div>}</div>{filteredVariants.length ? <div className="variant-list">{filteredVariants.slice(0, visibleVariants).map(p => <button key={p.sku_code} className="variant-row" onClick={() => openPurchase(p)}><span><span className="variant-name">{p.product_name}</span>{p.type_name && <span className="variant-meta">{p.type_name}</span>}</span><span className="variant-price">{formatRupiah(p.selling_price)}</span></button>)}{filteredVariants.length > visibleVariants && <button className="outline-btn" onClick={() => setVisibleVariants(n => n + 60)}>Tampilkan lebih banyak ({filteredVariants.length - visibleVariants} lagi)</button>}</div> : <div className="empty-state"><div className="empty-icon">⌕</div><b>Pilihan tidak ditemukan</b><span>Coba kata kunci lain.</span></div>}</>}</Modal>}
 
     {authOpen && <Modal onClose={() => setAuthOpen(false)}><div className="modal-kicker">WELCOME TO RYUU</div><h2>{authMode === 'login' ? 'Masuk ke akunmu' : 'Buat akun baru'}</h2><p className="modal-subtitle">Kelola pesanan dan lanjutkan top-up dari satu akun.</p><form className="form-stack" onSubmit={submitAuth}>{authMode === 'register' && <label>Nama lengkap<input value={fullName} onChange={e => setFullName(e.target.value)} placeholder="Nama kamu" required/></label>}<label>Email<input type="email" value={authEmail} onChange={e => setAuthEmail(e.target.value)} placeholder="nama@email.com" autoComplete="email" required/></label><label>Password<input type="password" value={authPassword} onChange={e => setAuthPassword(e.target.value)} placeholder="Minimal 6 karakter" minLength={6} autoComplete={authMode === 'login' ? 'current-password' : 'new-password'} required/></label>{authMessage && <div className="inline-message">{authMessage}</div>}<button className="primary-btn full" disabled={authBusy}>{authBusy ? 'Memproses…' : authMode === 'login' ? 'Masuk' : 'Daftar akun'}</button></form><div className="auth-switch">{authMode === 'login' ? 'Belum punya akun?' : 'Sudah punya akun?'} <button onClick={() => { setAuthMode(authMode === 'login' ? 'register' : 'login'); setAuthMessage(''); }}>{authMode === 'login' ? 'Daftar' : 'Masuk'}</button></div></Modal>}
 
@@ -334,6 +363,10 @@ function InquiryInput({ field, value, onChange, fallbackLabel, fallbackPlacehold
   const options = Array.isArray(field?.options) ? field.options : [];
   return <label>{label} {required && <i className="required-tag">Wajib</i>}{options.length ? <select value={value} onChange={e => onChange(e.target.value)} required={required}><option value="">Pilih {label}</option>{options.map(option => <option key={String(option.value)} value={String(option.value)}>{option.label}</option>)}</select> : <input type={field?.type === 'number' ? 'number' : 'text'} value={value} onChange={e => onChange(e.target.value)} placeholder={field?.placeholder || fallbackPlaceholder || `Masukkan ${label}`} required={required}/>}</label>;
 }
+function BrandCard({ brand, onOpen }) {
+  const info = { category_name: brand.category_name, brand_name: brand.brand };
+  return <article className="product-card brand-card" role="button" tabIndex={0} onClick={onOpen} onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(); } }}><div className="product-card-top"><div className={`product-avatar ${classNameFor(info)}`}>{productInitial({ brand_name: brand.brand })}</div><span className="available-label"><span></span> {brand.product_count} pilihan</span></div><div className="product-info"><small>{brand.category_name || 'Produk digital'}</small><h3>{brand.brand}</h3></div><div className="product-card-bottom"><div><small>Mulai dari</small><strong>{formatRupiah(brand.min_price)}</strong></div><span className="buy-btn">Lihat <span>→</span></span></div></article>;
+}
 function ProductCard({ product, onBuy }) {
   const type = `${product.brand_name || product.category_name || 'Digital'} · ${product.type_name || 'Produk digital'}`;
   return <article className="product-card"><div className="product-card-top"><div className={`product-avatar ${classNameFor(product)}`}>{productInitial(product)}</div><span className="available-label"><span></span> Tersedia</span></div><div className="product-info"><small>{type}</small><h3>{product.product_name}</h3><p>{product.brand_name || product.category_name}</p></div><div className="product-card-bottom"><div><small>Mulai dari</small><strong>{formatRupiah(product.selling_price)}</strong></div><button className="buy-btn" onClick={onBuy}>Pilih <span>→</span></button></div></article>;
@@ -347,8 +380,8 @@ function classifyStatic(p) {
   if (/game|games|mobile legends|free fire|pubg|valorant|roblox|genshin|8 ball/.test(s)) return 'Game';
   return 'Digital';
 }
-function Modal({ children, onClose }) {
-  return <div className="modal-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}><section className="modal-card"><button className="modal-close" onClick={onClose} aria-label="Tutup">×</button>{children}</section></div>;
+function Modal({ children, onClose, wide = false }) {
+  return <div className="modal-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}><section className={wide ? 'modal-card modal-wide' : 'modal-card'}><button className="modal-close" onClick={onClose} aria-label="Tutup">×</button>{children}</section></div>;
 }
 function statusLabel(value) {
   const labels = { pending: 'Menunggu pembayaran', paid: 'Dibayar', expired: 'Kedaluwarsa', failed: 'Gagal', refund_pending: 'Refund diproses', refunded: 'Dikembalikan', awaiting_payment: 'Menunggu pembayaran', submitting: 'Mengirim ke provider', processing: 'Sedang diproses', success: 'Berhasil', manual_review: 'Perlu pemeriksaan', requested: 'Menunggu admin', submitted: 'Diajukan', manual_required: 'Refund manual diperlukan' };
