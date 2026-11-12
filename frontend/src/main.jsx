@@ -20,6 +20,7 @@ function App() {
   const [brandSearch, setBrandSearch] = useState('');
   const [brandType, setBrandType] = useState('Semua');
   const [visibleVariants, setVisibleVariants] = useState(60);
+  const [brandServer, setBrandServer] = useState(null);
   const [loadingProducts, setLoadingProducts] = useState(true);
   const [loadError, setLoadError] = useState('');
   const [category, setCategory] = useState('Semua');
@@ -82,7 +83,7 @@ function App() {
     finally { setLoadingProducts(false); }
   }
   async function openBrand(brand) {
-    setSelectedBrand(brand); setBrandProducts([]); setBrandSearch(''); setBrandType('Semua');
+    setSelectedBrand(brand); setBrandProducts([]); setBrandSearch(''); setBrandType('Semua'); setBrandServer(null);
     setVisibleVariants(60); setBrandError(''); setBrandLoading(true);
     try {
       const PAGE = 1000;
@@ -135,14 +136,27 @@ function App() {
   }), [brands, category, search]);
   useEffect(() => { setVisibleBrands(48); }, [category, search]);
   useEffect(() => { setVisibleVariants(60); }, [brandSearch, brandType]);
-  const brandTypes = useMemo(() => {
-    const types = [...new Set(brandProducts.map(p => p.type_name).filter(Boolean))];
-    return types.length > 1 && types.length <= 14 ? ['Semua', ...types] : [];
+  // Region / server step: only shown when a brand has more than one server (e.g. Indonesia, Global).
+  const brandServers = useMemo(() => {
+    const groups = new Map();
+    for (const p of brandProducts) {
+      const key = serverKeyOf(p);
+      const g = groups.get(key) || { key, count: 0, minPrice: Infinity };
+      g.count += 1; g.minPrice = Math.min(g.minPrice, Number(p.selling_price) || Infinity);
+      groups.set(key, g);
+    }
+    return groups.size > 1 ? [...groups.values()].sort((x, y) => (x.key === '' ? 1 : y.key === '' ? -1 : x.key.localeCompare(y.key, 'id'))) : [];
   }, [brandProducts]);
+  const needsServerChoice = brandServers.length > 1 && brandServer === null;
+  const serverProducts = useMemo(() => brandServers.length > 1 && brandServer !== null ? brandProducts.filter(p => serverKeyOf(p) === brandServer) : brandProducts, [brandProducts, brandServers, brandServer]);
+  const brandTypes = useMemo(() => {
+    const types = [...new Set(serverProducts.map(p => p.type_name).filter(Boolean))];
+    return types.length > 1 && types.length <= 14 ? ['Semua', ...types] : [];
+  }, [serverProducts]);
   const filteredVariants = useMemo(() => {
     const term = brandSearch.toLowerCase().trim();
-    return brandProducts.filter(p => (brandType === 'Semua' || p.type_name === brandType) && (!term || `${p.product_name} ${p.type_name || ''}`.toLowerCase().includes(term)));
-  }, [brandProducts, brandSearch, brandType]);
+    return serverProducts.filter(p => (brandType === 'Semua' || p.type_name === brandType) && (!term || `${p.product_name} ${p.type_name || ''}`.toLowerCase().includes(term)));
+  }, [serverProducts, brandSearch, brandType]);
 
   function classify(p) {
     const s = `${p.category_name || ''} ${p.brand_name || ''} ${p.product_name || ''} ${p.type_name || ''}`.toLowerCase();
@@ -341,7 +355,7 @@ function App() {
 
     <footer className="footer"><div className="footer-top"><a className="brand" href="#home"><span className="brand-mark">R</span><span>Ryuu<span className="brand-light">TopUp</span><small>TOP UP • DIGITAL GOODS</small></span></a><p>One place for your digital needs.</p></div><div className="footer-bottom"><span>© {new Date().getFullYear()} RyuuTopUp. All rights reserved.</span><span>Secure checkout · Digital products</span></div></footer>
 
-    {selectedBrand && <Modal wide onClose={() => setSelectedBrand(null)}><div className="brand-head"><div className={`product-avatar ${classNameFor({ category_name: selectedBrand.category_name, brand_name: selectedBrand.brand })}`}>{productInitial({ brand_name: selectedBrand.brand })}</div><div><div className="modal-kicker">PILIH NOMINAL / PAKET</div><h2>{selectedBrand.brand}</h2><small>{brandLoading ? 'Memuat pilihan…' : `${brandProducts.length} pilihan tersedia`}</small></div></div>{brandError ? <div className="error-panel"><b>Pilihan belum dapat dimuat</b><p>{brandError}</p><button className="outline-btn" onClick={() => openBrand(selectedBrand)}>Coba lagi</button></div> : brandLoading ? <div className="empty-state"><div className="loader"></div><b>Memuat pilihan {selectedBrand.brand}…</b></div> : <><div className="variant-tools"><label className="search-box"><span>⌕</span><input value={brandSearch} onChange={e => setBrandSearch(e.target.value)} placeholder={`Cari di ${selectedBrand.brand}…`}/></label>{brandTypes.length > 0 && <div className="variant-chips">{brandTypes.map(t => <button key={t} className={brandType === t ? 'chip-active' : ''} onClick={() => setBrandType(t)}>{t}</button>)}</div>}</div>{filteredVariants.length ? <div className="variant-list">{filteredVariants.slice(0, visibleVariants).map(p => <button key={p.sku_code} className="variant-row" onClick={() => openPurchase(p)}><span><span className="variant-name">{p.product_name}</span>{p.type_name && <span className="variant-meta">{p.type_name}</span>}</span><span className="variant-price">{formatRupiah(p.selling_price)}</span></button>)}{filteredVariants.length > visibleVariants && <button className="outline-btn" onClick={() => setVisibleVariants(n => n + 60)}>Tampilkan lebih banyak ({filteredVariants.length - visibleVariants} lagi)</button>}</div> : <div className="empty-state"><div className="empty-icon">⌕</div><b>Pilihan tidak ditemukan</b><span>Coba kata kunci lain.</span></div>}</>}</Modal>}
+    {selectedBrand && <Modal wide onClose={() => setSelectedBrand(null)}><div className="brand-head"><div className={`product-avatar ${classNameFor({ category_name: selectedBrand.category_name, brand_name: selectedBrand.brand })}`}>{productInitial({ brand_name: selectedBrand.brand })}</div><div><div className="modal-kicker">{needsServerChoice ? 'PILIH WILAYAH / SERVER' : 'PILIH NOMINAL / PAKET'}</div><h2>{selectedBrand.brand}</h2><small>{brandLoading ? 'Memuat pilihan…' : needsServerChoice ? `${brandServers.length} wilayah · ${brandProducts.length} pilihan` : `${serverProducts.length} pilihan tersedia`}</small></div></div>{brandError ? <div className="error-panel"><b>Pilihan belum dapat dimuat</b><p>{brandError}</p><button className="outline-btn" onClick={() => openBrand(selectedBrand)}>Coba lagi</button></div> : brandLoading ? <div className="empty-state"><div className="loader"></div><b>Memuat pilihan {selectedBrand.brand}…</b></div> : needsServerChoice ? <><p className="step-title">Pilih wilayah / server</p><div className="server-list">{brandServers.map(g => <button key={g.key || 'umum'} className="server-card" onClick={() => { setBrandServer(g.key); setBrandType('Semua'); setBrandSearch(''); }}><span className="server-name">{regionLabel(g.key)}</span><span className="server-meta">{g.count} pilihan{Number.isFinite(g.minPrice) ? ` · mulai ${formatRupiah(g.minPrice)}` : ''}</span><span className="server-go">→</span></button>)}</div></> : <>{brandServers.length > 1 && <div className="server-bar"><span>Wilayah: <b>{regionLabel(brandServer)}</b></span><button onClick={() => { setBrandServer(null); setBrandType('Semua'); setBrandSearch(''); }}>Ganti wilayah</button></div>}<div className="variant-tools"><label className="search-box"><span>⌕</span><input value={brandSearch} onChange={e => setBrandSearch(e.target.value)} placeholder={`Cari di ${selectedBrand.brand}…`}/></label>{brandTypes.length > 0 && <div className="variant-chips">{brandTypes.map(t => <button key={t} className={brandType === t ? 'chip-active' : ''} onClick={() => setBrandType(t)}>{t}</button>)}</div>}</div>{filteredVariants.length ? <div className="variant-list">{filteredVariants.slice(0, visibleVariants).map(p => <button key={p.sku_code} className="variant-row" onClick={() => openPurchase(p)}><span><span className="variant-name">{p.product_name}</span>{p.type_name && <span className="variant-meta">{p.type_name}</span>}</span><span className="variant-price">{formatRupiah(p.selling_price)}</span></button>)}{filteredVariants.length > visibleVariants && <button className="outline-btn" onClick={() => setVisibleVariants(n => n + 60)}>Tampilkan lebih banyak ({filteredVariants.length - visibleVariants} lagi)</button>}</div> : <div className="empty-state"><div className="empty-icon">⌕</div><b>Pilihan tidak ditemukan</b><span>Coba kata kunci lain.</span></div>}</>}</Modal>}
 
     {authOpen && <Modal onClose={() => setAuthOpen(false)}><div className="modal-kicker">WELCOME TO RYUU</div><h2>{authMode === 'login' ? 'Masuk ke akunmu' : 'Buat akun baru'}</h2><p className="modal-subtitle">Kelola pesanan dan lanjutkan top-up dari satu akun.</p><form className="form-stack" onSubmit={submitAuth}>{authMode === 'register' && <label>Nama lengkap<input value={fullName} onChange={e => setFullName(e.target.value)} placeholder="Nama kamu" required/></label>}<label>Email<input type="email" value={authEmail} onChange={e => setAuthEmail(e.target.value)} placeholder="nama@email.com" autoComplete="email" required/></label><label>Password<input type="password" value={authPassword} onChange={e => setAuthPassword(e.target.value)} placeholder="Minimal 6 karakter" minLength={6} autoComplete={authMode === 'login' ? 'current-password' : 'new-password'} required/></label>{authMessage && <div className="inline-message">{authMessage}</div>}<button className="primary-btn full" disabled={authBusy}>{authBusy ? 'Memproses…' : authMode === 'login' ? 'Masuk' : 'Daftar akun'}</button></form><div className="auth-switch">{authMode === 'login' ? 'Belum punya akun?' : 'Sudah punya akun?'} <button onClick={() => { setAuthMode(authMode === 'login' ? 'register' : 'login'); setAuthMessage(''); }}>{authMode === 'login' ? 'Daftar' : 'Masuk'}</button></div></Modal>}
 
@@ -363,6 +377,16 @@ function InquiryInput({ field, value, onChange, fallbackLabel, fallbackPlacehold
   const options = Array.isArray(field?.options) ? field.options : [];
   return <label>{label} {required && <i className="required-tag">Wajib</i>}{options.length ? <select value={value} onChange={e => onChange(e.target.value)} required={required}><option value="">Pilih {label}</option>{options.map(option => <option key={String(option.value)} value={String(option.value)}>{option.label}</option>)}</select> : <input type={field?.type === 'number' ? 'number' : 'text'} value={value} onChange={e => onChange(e.target.value)} placeholder={field?.placeholder || fallbackPlaceholder || `Masukkan ${label}`} required={required}/>}</label>;
 }
+// Short display labels for regions: Indonesia -> ID, Malaysia -> MY, Singapore -> SG, ...
+const REGION_LABELS = [['indonesia', 'ID'], ['malaysia', 'MY'], ['singapore', 'SG'], ['philippine', 'PH'], ['thailand', 'TH'], ['vietnam', 'VN'], ['brunei', 'BN']];
+function regionLabel(name) {
+  const text = String(name || '').trim();
+  if (!text) return 'Lainnya';
+  const lower = text.toLowerCase();
+  const found = REGION_LABELS.find(([word]) => lower.includes(word));
+  return found ? found[1] : text;
+}
+function serverKeyOf(p) { return String(p.server_name || p.server_code || '').trim(); }
 function BrandCard({ brand, onOpen }) {
   const info = { category_name: brand.category_name, brand_name: brand.brand };
   return <article className="product-card brand-card" role="button" tabIndex={0} onClick={onOpen} onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(); } }}><div className="product-card-top"><div className={`product-avatar ${classNameFor(info)}`}>{productInitial({ brand_name: brand.brand })}</div><span className="available-label"><span></span> {brand.product_count} pilihan</span></div><div className="product-info"><small>{brand.category_name || 'Produk digital'}</small><h3>{brand.brand}</h3></div><div className="product-card-bottom"><div><small>Mulai dari</small><strong>{formatRupiah(brand.min_price)}</strong></div><span className="buy-btn">Lihat <span>→</span></span></div></article>;
